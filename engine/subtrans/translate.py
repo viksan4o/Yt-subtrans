@@ -116,11 +116,22 @@ class Translator:
         return {**first, **second}
 
     def translate(self, cues: list[Cue],
-                  on_progress: Callable[[int, int], None] | None = None) -> list[Cue]:
-        """Translate all cues; returns new cues with wrapped target text and identical timings."""
-        done: dict[int, str] = {}
+                  on_progress: Callable[[int, int], None] | None = None,
+                  done: dict[int, str] | None = None,
+                  on_batch: Callable[[dict[int, str]], None] | None = None) -> list[Cue]:
+        """Translate all cues; returns new cues with wrapped target text and identical timings.
+
+        `done` holds translations from an earlier run; batches already fully translated are skipped.
+        `on_batch` is called after every finished batch (used to save progress). A QuotaExceeded
+        from the provider is not retried: it propagates so the caller can stop and resume later.
+        """
+        done = dict(done or {})
         for batch in make_batches(cues, self.batch_size, self.context_size):
+            if all(c.id in done for c in batch.cues):
+                continue
             done.update(self.translate_batch(batch.cues, batch.context, done))
+            if on_batch:
+                on_batch(done)
             if on_progress:
-                on_progress(len(done), len(cues))
+                on_progress(sum(c.id in done for c in cues), len(cues))
         return [Cue(c.id, c.start, c.end, wrap_text(done[c.id])) for c in cues]

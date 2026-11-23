@@ -112,7 +112,7 @@ def test_prompt_inserts_language_names():
 def test_cli_translate_srt(tmp_path, capsys):
     src = tmp_path / "sample.srt"
     src.write_text(SAMPLE, encoding="utf-8")
-    assert cli.main(["translate-srt", str(src)]) == 0
+    assert cli.main(["translate-srt", str(src), "--provider", "fake"]) == 0
     events = [json.loads(ln) for ln in capsys.readouterr().out.splitlines()]
     assert events[-1]["event"] == "done" and len(events[-1]["cues"]) == 3
     out = parse_srt((tmp_path / "sample.bg.srt").read_text(encoding="utf-8"))
