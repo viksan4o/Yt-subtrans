@@ -1,3 +1,4 @@
-# Runtime: google-genai (Gemini). Dev only: pytest
+# Runtime: google-genai (Gemini), youtube-transcript-api (captions). Dev only: pytest
 google-genai>=1.0
+youtube-transcript-api>=1.0
 pytest>=8
