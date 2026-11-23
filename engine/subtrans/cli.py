@@ -2,6 +2,7 @@
 
     python -m subtrans.cli translate <url_or_id> [options]
     python -m subtrans.cli translate-srt <file.srt> [options]
+    python -m subtrans.cli list-models [--api-key KEY]   (Gemini models usable with your key)
 
 Options: --src en --tgt bg --provider gemini|claude|ollama|fake --model NAME --rpm N --rpd N
          --api-key KEY --glossary file.json --srt out.srt
@@ -110,7 +111,15 @@ def build_parser() -> argparse.ArgumentParser:
         t.add_argument("--api-key", help="key for gemini/claude (default: GEMINI_API_KEY / ANTHROPIC_API_KEY)")
         t.add_argument("--glossary")
         t.add_argument("--srt", help="output .srt path")
+    lm = sub.add_parser("list-models", help="list the Gemini models your key can use")
+    lm.add_argument("--api-key")
     return p
+
+
+def cmd_list_models(args, client=None) -> int:
+    from .providers.gemini import list_models
+    emit("models", models=list_models(args.api_key, client=client))
+    return 0
 
 
 def main(argv=None) -> int:
@@ -118,8 +127,10 @@ def main(argv=None) -> int:
         sys.stdout.reconfigure(encoding="utf-8")  # Windows consoles default to a legacy code page
     args = build_parser().parse_args(argv)
     load_dotenv()
-    args.provider = args.provider or default_provider()
     try:
+        if args.command == "list-models":
+            return cmd_list_models(args)
+        args.provider = args.provider or default_provider()
         return cmd_translate(args) if args.command == "translate" else cmd_translate_srt(args)
     except Exception as e:  # report every failure as a JSON event for the app
         message = str(e)

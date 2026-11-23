@@ -125,30 +125,57 @@ class _ApiErr(Exception):
         self.code = code
 
 
-def _gemini_with(errors, message=""):
-    """Provider whose fake client raises the given error codes first, then answers."""
+def _gemini_with(errors, fallbacks=("lite-a", "lite-b")):
+    """Provider whose fake client raises the given error codes (or {model: code}) first, then answers."""
     from subtrans.throttle import RateLimiter
     calls = []
 
     def generate_content(model, contents, config):
         calls.append(model)
-        if errors:
+        if isinstance(errors, dict):
+            if model in errors:
+                raise _ApiErr(errors[model])
+        elif errors:
             raise _ApiErr(errors.pop(0))
         return S(text='[{"id": 1, "text": "здрасти"}]')
     client = S(models=S(generate_content=generate_content))
     slept = []
-    p = GeminiProvider("gemini-x", 10_000, 10_000, client=client,
+    p = GeminiProvider("gemini-x", 10_000, 10_000, client=client, fallbacks=fallbacks,
                        limiter=RateLimiter(10_000, 10_000, sleep=lambda s: None), sleep=slept.append)
     return p, calls, slept
 
 
-def test_busy_model_is_retried():
+def test_busy_and_minute_limit_are_retried_on_same_model():
     p, calls, slept = _gemini_with([503, 429, 503])
     waits = []
     p.on_wait = waits.append
     assert "здрасти" in p.complete("SYS", "{}")
-    assert len(calls) == 4 and slept == [5, 10, 20]
-    assert "претоварен" in waits[0] and "лимитът на минута" in waits[1] and "(3/5)" in waits[2]
+    assert calls == ["gemini-x"] * 4 and slept == [5, 10, 20]
+    assert "претоварен" in waits[0] and "лимитът на минута" in waits[1]
+
+
+def test_busy_model_switches_to_fallback_and_stays_there():
+    p, calls, slept = _gemini_with({"gemini-x": 503})
+    waits = []
+    p.on_wait = waits.append
+    assert "здрасти" in p.complete("SYS", "{}")
+    assert calls == ["gemini-x"] * 3 + ["lite-a"] and slept == [5, 10]
+    assert "Минавам на „lite-a“" in waits[-1]
+    p.complete("SYS", "{}")
+    assert calls[-1] == "lite-a" and p.model == "lite-a"
+
+
+def test_unknown_model_switches_without_waiting():
+    p, calls, slept = _gemini_with({"gemini-x": 404, "lite-a": 404})
+    assert "здрасти" in p.complete("SYS", "{}")
+    assert calls == ["gemini-x", "lite-a", "lite-b"] and slept == []
+
+
+def test_all_models_failing_gives_clear_error():
+    p, calls, _ = _gemini_with({"gemini-x": 404, "lite-a": 404, "lite-b": 503})
+    with pytest.raises(RuntimeError, match="Няма друг наличен Gemini модел.*list-models"):
+        p.complete("SYS", "{}")
+    assert calls == ["gemini-x", "lite-a"] + ["lite-b"] * 6  # last model gets the full retry budget
 
 
 def test_daily_quota_is_not_retried(monkeypatch):
@@ -168,17 +195,19 @@ def test_minute_limit_becomes_quota_after_retries():
     assert len(calls) == 6
 
 
-def test_busy_model_gives_up_with_hint():
-    p, calls, _ = _gemini_with([503] * 6)
-    with pytest.raises(RuntimeError, match="--model gemini-3.5-flash-lite"):
-        p.complete("SYS", "{}")
+def test_list_models_command(capsys):
+    models = [S(name="models/gemini-3.5-flash-lite", supported_actions=["generateContent"]),
+              S(name="models/gemini-embedding-1", supported_actions=["embedContent"]),
+              S(name="models/gemini-3.8-flash", supported_actions=["generateContent", "countTokens"])]
+    client = S(models=S(list=lambda: models))
+    assert cli.cmd_list_models(S(api_key=None), client=client) == 0
+    assert json.loads(capsys.readouterr().out) == {
+        "event": "models", "models": ["gemini-3.5-flash-lite", "gemini-3.8-flash"]}
 
 
-def test_unknown_model_gives_hint():
-    p, calls, _ = _gemini_with([404])
-    with pytest.raises(RuntimeError, match="gemini-x.*--model gemini-3.5-flash-lite"):
-        p.complete("SYS", "{}")
-    assert len(calls) == 1
+def test_list_models_needs_key(capsys):
+    assert cli.main(["list-models"]) == 1
+    assert "GEMINI_API_KEY" in capsys.readouterr().out
 
 
 def test_model_option_reaches_gemini(fake_genai):
