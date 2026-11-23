@@ -42,7 +42,7 @@ class _Resp:
 
 class _Err(Exception):
     def __init__(self, code):
-        super().__init__(f"{code} RESOURCE_EXHAUSTED" if code == 429 else str(code))
+        super().__init__(f"{code} RESOURCE_EXHAUSTED GenerateRequestsPerDay" if code == 429 else str(code))
         self.code = code
 
 
@@ -89,10 +89,10 @@ def test_missing_key_gives_clear_bulgarian_error():
 
 
 def test_settings_defaults_env_and_dotenv(tmp_path, monkeypatch):
-    assert gemini_settings() == {"model": "gemini-flash-latest", "rpm": 5, "rpd": 20}
-    (tmp_path / ".env").write_text("GEMINI_PRESET=volume\nGEMINI_RPM=9\n", encoding="utf-8")
+    assert gemini_settings() == {"model": "gemini-3.5-flash-lite", "rpm": 15, "rpd": 500}
+    (tmp_path / ".env").write_text("GEMINI_PRESET=quality\nGEMINI_RPM=9\n", encoding="utf-8")
     load_dotenv(tmp_path / ".env")
-    assert gemini_settings() == {"model": "gemini-flash-lite-latest", "rpm": 9, "rpd": 500}
+    assert gemini_settings() == {"model": "gemini-3.8-flash", "rpm": 9, "rpd": 20}
     assert gemini_settings(model="custom", rpd=7)["model"] == "custom"
 
 

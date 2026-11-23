@@ -115,3 +115,72 @@ def test_repeated_auto_caption_lines_are_merged():
     assert snippets_to_cues(snips, generated=True) == [
         Cue(1, 0.0, 6.0, "made-up one"), Cue(2, 6.0, 7.0, "made-up two")]
     assert len(snippets_to_cues(snips, generated=False)) == 4  # manual captions are left alone
+
+
+class _ApiErr(Exception):
+    extra = ""
+
+    def __init__(self, code):
+        super().__init__(f"{code} error {_ApiErr.extra}")
+        self.code = code
+
+
+def _gemini_with(errors, message=""):
+    """Provider whose fake client raises the given error codes first, then answers."""
+    from subtrans.throttle import RateLimiter
+    calls = []
+
+    def generate_content(model, contents, config):
+        calls.append(model)
+        if errors:
+            raise _ApiErr(errors.pop(0))
+        return S(text='[{"id": 1, "text": "здрасти"}]')
+    client = S(models=S(generate_content=generate_content))
+    slept = []
+    p = GeminiProvider("gemini-x", 10_000, 10_000, client=client,
+                       limiter=RateLimiter(10_000, 10_000, sleep=lambda s: None), sleep=slept.append)
+    return p, calls, slept
+
+
+def test_busy_model_is_retried():
+    p, calls, slept = _gemini_with([503, 429, 503])
+    waits = []
+    p.on_wait = waits.append
+    assert "здрасти" in p.complete("SYS", "{}")
+    assert len(calls) == 4 and slept == [5, 10, 20]
+    assert "претоварен" in waits[0] and "лимитът на минута" in waits[1] and "(3/5)" in waits[2]
+
+
+def test_daily_quota_is_not_retried(monkeypatch):
+    from subtrans.providers import QuotaExceeded
+    monkeypatch.setattr(_ApiErr, "extra", "GenerateRequestsPerDay")
+    p, calls, slept = _gemini_with([429])
+    with pytest.raises(QuotaExceeded):
+        p.complete("SYS", "{}")
+    assert len(calls) == 1 and slept == []
+
+
+def test_minute_limit_becomes_quota_after_retries():
+    from subtrans.providers import QuotaExceeded
+    p, calls, _ = _gemini_with([429] * 6)
+    with pytest.raises(QuotaExceeded):
+        p.complete("SYS", "{}")
+    assert len(calls) == 6
+
+
+def test_busy_model_gives_up_with_hint():
+    p, calls, _ = _gemini_with([503] * 6)
+    with pytest.raises(RuntimeError, match="--model gemini-3.5-flash-lite"):
+        p.complete("SYS", "{}")
+
+
+def test_unknown_model_gives_hint():
+    p, calls, _ = _gemini_with([404])
+    with pytest.raises(RuntimeError, match="gemini-x.*--model gemini-3.5-flash-lite"):
+        p.complete("SYS", "{}")
+    assert len(calls) == 1
+
+
+def test_model_option_reaches_gemini(fake_genai):
+    p = get_provider("gemini", "gemini-3.8-flash", api_key=KEY)
+    assert p.model == "gemini-3.8-flash"

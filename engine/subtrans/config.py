@@ -6,12 +6,15 @@ Keys are never logged or written anywhere by the engine.
 import os
 from pathlib import Path
 
-# Presets: (model id, RPM, RPD). Conservative free-tier values reported around Oct 2026;
-# they change, so users should check Google AI Studio and override with GEMINI_RPM / GEMINI_RPD.
+# Presets: (model id, RPM, RPD). Conservative free-tier guesses; they change, so check Google AI
+# Studio and override with GEMINI_MODEL / GEMINI_RPM / GEMINI_RPD or --model.
+# Checked Nov 2026 with a new key: the 2.5 models and the "-latest" aliases return 404 for new
+# users, and the 3.x flash models were often busy (503), while 3.5 flash-lite answered.
 GEMINI_PRESETS = {
-    "quality": ("gemini-flash-latest", 5, 20),
-    "volume": ("gemini-flash-lite-latest", 15, 500),
+    "quality": ("gemini-3.8-flash", 5, 20),
+    "volume": ("gemini-3.5-flash-lite", 15, 500),
 }
+GEMINI_DEFAULT_PRESET = "volume"
 DEFAULT_PRESET = "quality"
 
 
@@ -29,7 +32,8 @@ def load_dotenv(path: str | Path = ".env") -> None:
 
 
 def gemini_settings(model: str | None = None, rpm: int | None = None, rpd: int | None = None) -> dict:
-    preset = GEMINI_PRESETS.get(os.environ.get("GEMINI_PRESET", DEFAULT_PRESET), GEMINI_PRESETS[DEFAULT_PRESET])
+    preset = GEMINI_PRESETS.get(os.environ.get("GEMINI_PRESET", GEMINI_DEFAULT_PRESET),
+                                GEMINI_PRESETS[GEMINI_DEFAULT_PRESET])
     return {
         "model": model or os.environ.get("GEMINI_MODEL") or preset[0],
         "rpm": int(rpm or os.environ.get("GEMINI_RPM") or preset[1]),

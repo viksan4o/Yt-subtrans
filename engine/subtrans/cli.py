@@ -59,6 +59,8 @@ def run(args, video_id: str, title: str, load_cues, default_out: Path) -> int:
     else:
         glossary = json.loads(Path(args.glossary).read_text(encoding="utf-8")) if args.glossary else {}
         provider = get_provider(args.provider, args.model, args.rpm, args.rpd, args.api_key)
+        if hasattr(provider, "on_wait"):
+            provider.on_wait = lambda message: emit("waiting", message=message)
         extra = {"batch_size": provider.batch_size} if getattr(provider, "batch_size", None) else {}
         translator = Translator(provider, args.src, args.tgt, title=title, glossary=glossary, **extra)
         try:
