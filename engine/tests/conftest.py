@@ -5,6 +5,8 @@ import pytest
 def _isolated_env(tmp_path, monkeypatch):
     """Keep tests away from the real cache, real keys and any local .env."""
     monkeypatch.setenv("SUBTRANS_CACHE_DIR", str(tmp_path / "cache"))
-    for var in ("GEMINI_API_KEY", "GEMINI_MODEL", "GEMINI_RPM", "GEMINI_RPD", "GEMINI_PRESET"):
+    for var in ("GEMINI_API_KEY", "GEMINI_MODEL", "GEMINI_RPM", "GEMINI_RPD", "GEMINI_PRESET",
+                "ANTHROPIC_API_KEY", "ANTHROPIC_MODEL", "ANTHROPIC_RPM", "ANTHROPIC_RPD",
+                "ANTHROPIC_PRESET", "ANTHROPIC_EFFORT", "SUBTRANS_PROVIDER"):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.chdir(tmp_path)

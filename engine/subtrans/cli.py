@@ -3,7 +3,7 @@
     python -m subtrans.cli translate <url_or_id> [options]
     python -m subtrans.cli translate-srt <file.srt> [options]
 
-Options: --src en --tgt bg --provider gemini|fake --model NAME --rpm N --rpd N
+Options: --src en --tgt bg --provider gemini|claude|fake --model NAME --rpm N --rpd N
          --glossary file.json --srt out.srt
 Progress is cached per (video_id, source, target, provider, model): re-running resumes,
 and a finished run is served from the cache without new requests.
@@ -13,11 +13,12 @@ import argparse
 import dataclasses
 import hashlib
 import json
+import os
 import sys
 from pathlib import Path
 
 from .cache import TranslationCache
-from .config import gemini_settings, load_dotenv
+from .config import claude_settings, gemini_settings, load_dotenv
 from .models import Cue
 from .providers import QuotaExceeded, get_provider
 from .srt import parse_srt, write_srt
@@ -33,7 +34,8 @@ def emit(event: str, **fields) -> None:
 
 def model_name(provider: str, model: str | None) -> str:
     """Model id for the cache key, known without building the provider (so no key is needed)."""
-    return gemini_settings(model)["model"] if provider == "gemini" else (model or provider)
+    settings = {"gemini": gemini_settings, "claude": claude_settings}.get(provider)
+    return settings(model)["model"] if settings else (model or provider)
 
 
 def run(args, video_id: str, title: str, load_cues, default_out: Path) -> int:
@@ -90,7 +92,8 @@ def build_parser() -> argparse.ArgumentParser:
         t.add_argument(arg)
         t.add_argument("--src", default="en")
         t.add_argument("--tgt", default="bg")
-        t.add_argument("--provider", default="gemini")
+        t.add_argument("--provider", choices=["gemini", "claude", "fake"],
+                       help="default: SUBTRANS_PROVIDER from the environment/.env, else gemini")
         t.add_argument("--model")
         t.add_argument("--rpm", type=int, help="requests per minute (Gemini)")
         t.add_argument("--rpd", type=int, help="requests per day (Gemini)")
@@ -104,6 +107,7 @@ def main(argv=None) -> int:
         sys.stdout.reconfigure(encoding="utf-8")  # Windows consoles default to a legacy code page
     args = build_parser().parse_args(argv)
     load_dotenv()
+    args.provider = args.provider or os.environ.get("SUBTRANS_PROVIDER", "gemini")
     try:
         return cmd_translate(args) if args.command == "translate" else cmd_translate_srt(args)
     except Exception as e:  # report every failure as a JSON event for the app

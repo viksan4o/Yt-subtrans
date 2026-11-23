@@ -37,5 +37,22 @@ def gemini_settings(model: str | None = None, rpm: int | None = None, rpd: int |
     }
 
 
+# Claude (paid, the user's own Anthropic API key): (model id, RPM, RPD). Limits are a safety
+# margin only; the real limits depend on the user's Anthropic account tier.
+CLAUDE_PRESETS = {
+    "quality": ("claude-opus-5-5", 20, 5000),
+    "economy": ("claude-haiku-5-5", 20, 5000),
+}
+
+
+def claude_settings(model: str | None = None, rpm: int | None = None, rpd: int | None = None) -> dict:
+    preset = CLAUDE_PRESETS.get(os.environ.get("ANTHROPIC_PRESET", DEFAULT_PRESET), CLAUDE_PRESETS[DEFAULT_PRESET])
+    return {
+        "model": model or os.environ.get("ANTHROPIC_MODEL") or preset[0],
+        "rpm": int(rpm or os.environ.get("ANTHROPIC_RPM") or preset[1]),
+        "rpd": int(rpd or os.environ.get("ANTHROPIC_RPD") or preset[2]),
+    }
+
+
 def cache_dir() -> Path:
     return Path(os.environ.get("SUBTRANS_CACHE_DIR") or Path.home() / ".subtrans" / "cache")
