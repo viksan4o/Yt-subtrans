@@ -42,14 +42,30 @@ def test_request_shape_and_defaults():
         {"id": 1, "text": "BG hi"}]
     url, body = post.calls[0]
     assert url == "http://localhost:11434/api/chat"
+    assert body["options"]["num_ctx"] == 4096
     assert body["model"] == "bggpt" and body["format"] == "json" and body["stream"] is False
     assert body["messages"][0] == {"role": "system", "content": "SYS"}
     p = get_provider("ollama")  # no key needed
-    assert p.model == OLLAMA_DEFAULT_MODEL and p.batch_size == 25
+    assert p.model == OLLAMA_DEFAULT_MODEL and p.batch_size == 15 and p.num_ctx == 4096
 
 
 def test_single_object_reply_accepted():
     assert parse_response('{"id": 3, "text": "Здрасти"}', [3]) == {3: "Здрасти"}
+
+
+def test_echoed_input_with_empty_context_is_accepted():
+    raw = json.dumps({"title": "t", "glossary": {}, "context": [], "cues": [{"id": 1, "text": "Здравей"}]})
+    assert parse_response(raw, [1]) == {1: "Здравей"}
+
+
+def test_http_500_shows_ollama_reason_and_memory_hint():
+    import io
+
+    def oom(url, body, timeout):
+        raise urllib.error.HTTPError(url, 500, "Internal Server Error", None,
+                                     io.BytesIO(b'{"error":"model requires more system memory"}'))
+    with pytest.raises(RuntimeError, match="more system memory.*2.6B"):
+        OllamaProvider("m", post=oom).complete("S", "{}")
 
 
 def test_weak_json_recovers_with_retry_and_split():

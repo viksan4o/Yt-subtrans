@@ -8,6 +8,6 @@ def _isolated_env(tmp_path, monkeypatch):
     for var in ("GEMINI_API_KEY", "GEMINI_MODEL", "GEMINI_RPM", "GEMINI_RPD", "GEMINI_PRESET",
                 "ANTHROPIC_API_KEY", "ANTHROPIC_MODEL", "ANTHROPIC_RPM", "ANTHROPIC_RPD",
                 "ANTHROPIC_PRESET", "ANTHROPIC_EFFORT", "SUBTRANS_PROVIDER",
-                "OLLAMA_MODEL", "OLLAMA_HOST_URL", "OLLAMA_BATCH"):
+                "OLLAMA_MODEL", "OLLAMA_HOST_URL", "OLLAMA_BATCH", "OLLAMA_NUM_CTX"):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.chdir(tmp_path)

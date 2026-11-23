@@ -63,7 +63,8 @@ def ollama_settings(model: str | None = None) -> dict:
     return {
         "model": model or os.environ.get("OLLAMA_MODEL") or OLLAMA_DEFAULT_MODEL,
         "host": os.environ.get("OLLAMA_HOST_URL", "http://localhost:11434"),
-        "batch_size": int(os.environ.get("OLLAMA_BATCH") or 25),
+        "batch_size": int(os.environ.get("OLLAMA_BATCH") or 15),
+        "num_ctx": int(os.environ.get("OLLAMA_NUM_CTX") or 4096),
     }
 
 
