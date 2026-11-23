@@ -213,3 +213,48 @@ def test_list_models_needs_key(capsys):
 def test_model_option_reaches_gemini(fake_genai):
     p = get_provider("gemini", "gemini-3.8-flash", api_key=KEY)
     assert p.model == "gemini-3.8-flash"
+
+
+SRC = {1: "Mostly, we've been bumping into them by", 2: "accident. For a century, scientists have"}
+
+
+def test_src_echo_in_sync_is_accepted():
+    from subtrans.translate import parse_response
+    raw = json.dumps([{"id": 1, "src": "Mostly, we've been bumping into them by", "text": "Предимно ги срещаме"},
+                      {"id": 2, "src": "accident. For a century scientists have", "text": "случайно. Цял век учените"}])
+    assert parse_response(raw, [1, 2], SRC) == {1: "Предимно ги срещаме", 2: "случайно. Цял век учените"}
+
+
+def test_src_echo_shifted_by_one_cue_is_rejected():
+    from subtrans.translate import ValidationError, parse_response
+    raw = json.dumps([{"id": 1, "src": "accident. For a century, scientists have", "text": "а"},
+                      {"id": 2, "src": "had only a handful of good specimens to", "text": "б"}])
+    with pytest.raises(ValidationError, match="out of sync"):
+        parse_response(raw, [1, 2], SRC)
+
+
+def test_drifted_batch_is_retried():
+    replies = iter([
+        [{"id": 1, "src": SRC[2], "text": "грешно"}, {"id": 2, "src": "something else", "text": "грешно"}],
+        [{"id": 1, "src": SRC[1], "text": "едно"}, {"id": 2, "src": SRC[2], "text": "две"}]])
+
+    class Prov:
+        calls = 0
+
+        def complete(self, system, user):
+            Prov.calls += 1
+            assert '"src"' in system
+            return json.dumps(next(replies))
+    out = Translator(Prov(), "en", "bg").translate([Cue(1, 0, 1, SRC[1]), Cue(2, 1, 2, SRC[2])])
+    assert [c.text for c in out] == ["едно", "две"] and Prov.calls == 2
+
+
+def test_fresh_ignores_saved_progress(tmp_path, capsys):
+    src = tmp_path / "clip.srt"
+    src.write_text("1\n00:00:01,000 --> 00:00:02,000\nhello\n", encoding="utf-8")
+    assert cli.main(["translate-srt", str(src), "--provider", "fake"]) == 0
+    capsys.readouterr()
+    assert cli.main(["translate-srt", str(src), "--provider", "fake", "--fresh"]) == 0
+    events = [json.loads(ln) for ln in capsys.readouterr().out.splitlines()]
+    assert events[0] == {"event": "progress", "done": 0, "total": 1}
+    assert events[-1]["event"] == "done"

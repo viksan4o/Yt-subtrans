@@ -135,6 +135,7 @@ def test_cli_emits_quota_event_then_resumes(tmp_path, capsys, monkeypatch):
         self.model, self._client = model, next(clients)
         self.limiter = RateLimiter(10_000, 10_000, sleep=lambda s: None)
     monkeypatch.setattr(GeminiProvider, "__init__", fake_init)
+    monkeypatch.setattr(GeminiProvider, "batch_size", 2)
     monkeypatch.setattr("subtrans.translate.DEFAULT_BATCH_SIZE", 2)
     monkeypatch.setattr(Translator.__init__, "__defaults__",
                         ("en", "bg", "", None, 2, 5))

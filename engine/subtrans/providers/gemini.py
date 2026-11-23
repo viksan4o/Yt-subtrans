@@ -50,6 +50,8 @@ def _is_quota_error(e: Exception) -> bool:
 
 class GeminiProvider(TranslationProvider):
     name = "gemini"
+    # Smaller than the generic 90: on long batches translations drifted by a cue or more.
+    batch_size = int(os.environ.get("GEMINI_BATCH") or 40)
 
     def __init__(self, model: str, rpm: int, rpd: int, api_key: str | None = None,
                  client=None, limiter: RateLimiter | None = None, sleep=None,

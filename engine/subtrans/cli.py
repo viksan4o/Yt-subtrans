@@ -5,7 +5,7 @@
     python -m subtrans.cli list-models [--api-key KEY]   (Gemini models usable with your key)
 
 Options: --src en --tgt bg --provider gemini|claude|ollama|fake --model NAME --rpm N --rpd N
-         --api-key KEY --glossary file.json --srt out.srt
+         --api-key KEY --glossary file.json --srt out.srt --fresh (ignore saved progress)
 Default provider: SUBTRANS_PROVIDER, else gemini when GEMINI_API_KEY is set, else ollama (no key).
 API keys come only from the environment/.env or --api-key; they are never cached or printed.
 Progress is cached per (video_id, source, target, provider, model): re-running resumes,
@@ -48,7 +48,9 @@ def model_name(provider: str, model: str | None) -> str:
 
 def run(args, video_id: str, title: str, load_cues, default_out: Path) -> int:
     cache = TranslationCache(video_id, args.src, args.tgt, args.provider, model_name(args.provider, args.model))
-    done = cache.load()
+    done = {} if getattr(args, "fresh", False) else cache.load()
+    if getattr(args, "fresh", False):
+        cache.cues = []
     if cache.cues:
         cues = [Cue(**c) for c in cache.cues]
     else:
@@ -111,6 +113,7 @@ def build_parser() -> argparse.ArgumentParser:
         t.add_argument("--api-key", help="key for gemini/claude (default: GEMINI_API_KEY / ANTHROPIC_API_KEY)")
         t.add_argument("--glossary")
         t.add_argument("--srt", help="output .srt path")
+        t.add_argument("--fresh", action="store_true", help="ignore saved progress and translate again")
     lm = sub.add_parser("list-models", help="list the Gemini models your key can use")
     lm.add_argument("--api-key")
     return p

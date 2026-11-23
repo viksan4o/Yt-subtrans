@@ -1,5 +1,6 @@
 """Prompt building, response validation and batch translation with retry/split fallback."""
 
+import difflib
 import json
 import re
 from typing import Callable
@@ -14,12 +15,14 @@ LANGUAGE_NAMES = {"en": "English", "bg": "Bulgarian", "de": "German", "es": "Spa
 
 SYSTEM_TEMPLATE = """You translate subtitle cues from {source} to {target}.
 Rules:
-- Output JSON only: a list of {{"id": n, "text": "..."}} with exactly one item per input cue, the same ids, no merged or split cues.
+- Output JSON only: a list of {{"id": n, "src": "...", "text": "..."}} with exactly one item per input cue, the same ids, no merged or split cues. "src" is that cue's source text copied exactly; "text" is its translation.
+- Cues are often fragments of a sentence that continues in the next cue. Each "text" must translate ONLY the words of its own "src": never pull words from the next cue or push them into the previous one, even if {target} word order differs. Split the translated sentence at the matching point so every cue stays in sync with its timing.
 - Exactly ONE translation per cue. No notes, no variants, no transliteration or pronunciation.
 - Translate slang and idioms by meaning, using a real equivalent in {target}. If you do not know a genuine idiom, use plain neutral language. NEVER invent an idiom and never translate an idiom word for word.
 - Keep the speaker's tone and the intensity of profanity. No asterisk censoring; do not soften or intensify.
 - Gaming slang: "sweat"/"sweaty" means a try-hard player (Bulgarian: "потен").
 - Follow the glossary for slang and proper names, and keep names consistent.
+- Keep terminology consistent: once a thing has a {target} name (see the context translations), reuse exactly that word and grammatical gender everywhere.
 - Use the informal "ти" form by default. Render [Music] as [Музика] when translating into Bulgarian.
 - Keep each line short enough to read as a subtitle.
 The input is JSON with: title, glossary, context (previous cues as src/tgt pairs, read-only, do not output them) and cues (translate these)."""
@@ -60,8 +63,22 @@ def build_user_payload(cues: list[Cue], context: list[tuple[str, str]], title: s
     }, ensure_ascii=False)
 
 
-def parse_response(raw: str, expected_ids: list[int]) -> dict[int, str]:
-    """Parse the model reply; tolerate ``` fences. Raise ValidationError on any mismatch."""
+def _norm(text: str) -> str:
+    return " ".join(re.sub(r"[^\w\s]", " ", text.casefold()).split())
+
+
+def src_matches(echo: str, source: str) -> bool:
+    """True when the model's copy of a cue's source text is (nearly) that cue's text."""
+    a, b = _norm(echo), _norm(source)
+    return a == b or difflib.SequenceMatcher(None, a, b).ratio() >= 0.8
+
+
+def parse_response(raw: str, expected_ids: list[int], sources: dict[int, str] | None = None) -> dict[int, str]:
+    """Parse the model reply; tolerate ``` fences. Raise ValidationError on any mismatch.
+
+    When `sources` is given, an item's optional "src" echo must match that cue's source text, so a
+    reply whose translations slid onto neighbouring cues is rejected and retried.
+    """
     text = raw.strip()
     fence = re.match(r"^```[a-zA-Z]*\s*\n?(.*?)\n?```$", text, re.S)
     if fence:
@@ -84,9 +101,13 @@ def parse_response(raw: str, expected_ids: list[int]) -> dict[int, str]:
         if not item["text"].strip():
             raise ValidationError(f"empty text for id {item['id']}")
         try:
-            result[int(item["id"])] = item["text"].strip()
+            cue_id = int(item["id"])
         except (TypeError, ValueError) as e:
             raise ValidationError(f"bad id: {item['id']!r}") from e
+        echo = item.get("src")
+        if sources and isinstance(echo, str) and cue_id in sources and not src_matches(echo, sources[cue_id]):
+            raise ValidationError(f"cue {cue_id} out of sync: src {echo!r} != {sources[cue_id]!r}")
+        result[cue_id] = item["text"].strip()
     if len(data) != len(expected_ids) or set(result) != set(expected_ids):
         raise ValidationError(f"ids mismatch: expected {sorted(expected_ids)}, got {sorted(result)}")
     return result
@@ -114,7 +135,8 @@ class Translator:
         for _ in range(MAX_ATTEMPTS):
             payload = build_user_payload(cues, self._context_pairs(context, done), self.title, self.glossary)
             try:
-                return parse_response(self.provider.complete(self.system, payload), ids)
+                return parse_response(self.provider.complete(self.system, payload), ids,
+                                      {c.id: c.text for c in cues})
             except ValidationError as e:
                 last_error = e
         if len(cues) == 1:
