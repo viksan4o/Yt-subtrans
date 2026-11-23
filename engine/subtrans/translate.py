@@ -63,7 +63,9 @@ def parse_response(raw: str, expected_ids: list[int]) -> dict[int, str]:
         data = json.loads(text)
     except json.JSONDecodeError as e:
         raise ValidationError(f"invalid JSON: {e}") from e
-    if isinstance(data, dict):  # accept {"cues": [...]} style wrappers
+    if isinstance(data, dict) and "id" in data and "text" in data:  # single cue without a list
+        data = [data]
+    elif isinstance(data, dict):  # accept {"cues": [...]} style wrappers
         data = next((v for v in data.values() if isinstance(v, list)), None)
     if not isinstance(data, list):
         raise ValidationError("expected a JSON list")

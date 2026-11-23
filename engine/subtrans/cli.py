@@ -3,7 +3,7 @@
     python -m subtrans.cli translate <url_or_id> [options]
     python -m subtrans.cli translate-srt <file.srt> [options]
 
-Options: --src en --tgt bg --provider gemini|claude|fake --model NAME --rpm N --rpd N
+Options: --src en --tgt bg --provider gemini|claude|ollama|fake --model NAME --rpm N --rpd N
          --glossary file.json --srt out.srt
 Progress is cached per (video_id, source, target, provider, model): re-running resumes,
 and a finished run is served from the cache without new requests.
@@ -18,7 +18,7 @@ import sys
 from pathlib import Path
 
 from .cache import TranslationCache
-from .config import claude_settings, gemini_settings, load_dotenv
+from .config import claude_settings, gemini_settings, load_dotenv, ollama_settings
 from .models import Cue
 from .providers import QuotaExceeded, get_provider
 from .srt import parse_srt, write_srt
@@ -34,7 +34,7 @@ def emit(event: str, **fields) -> None:
 
 def model_name(provider: str, model: str | None) -> str:
     """Model id for the cache key, known without building the provider (so no key is needed)."""
-    settings = {"gemini": gemini_settings, "claude": claude_settings}.get(provider)
+    settings = {"gemini": gemini_settings, "claude": claude_settings, "ollama": ollama_settings}.get(provider)
     return settings(model)["model"] if settings else (model or provider)
 
 
@@ -52,7 +52,8 @@ def run(args, video_id: str, title: str, load_cues, default_out: Path) -> int:
     else:
         glossary = json.loads(Path(args.glossary).read_text(encoding="utf-8")) if args.glossary else {}
         provider = get_provider(args.provider, args.model, args.rpm, args.rpd)
-        translator = Translator(provider, args.src, args.tgt, title=title, glossary=glossary)
+        extra = {"batch_size": provider.batch_size} if getattr(provider, "batch_size", None) else {}
+        translator = Translator(provider, args.src, args.tgt, title=title, glossary=glossary, **extra)
         try:
             out = translator.translate(cues, on_progress=lambda d, t: emit("progress", done=d, total=t),
                                        done=done, on_batch=cache.save)
@@ -92,7 +93,7 @@ def build_parser() -> argparse.ArgumentParser:
         t.add_argument(arg)
         t.add_argument("--src", default="en")
         t.add_argument("--tgt", default="bg")
-        t.add_argument("--provider", choices=["gemini", "claude", "fake"],
+        t.add_argument("--provider", choices=["gemini", "claude", "ollama", "fake"],
                        help="default: SUBTRANS_PROVIDER from the environment/.env, else gemini")
         t.add_argument("--model")
         t.add_argument("--rpm", type=int, help="requests per minute (Gemini)")

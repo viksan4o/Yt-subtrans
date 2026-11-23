@@ -54,5 +54,18 @@ def claude_settings(model: str | None = None, rpm: int | None = None, rpd: int |
     }
 
 
+# Ollama (local, free). Default: BgGPT 9B, Q4_K_M (~5.8 GB, fits 8 GB VRAM). On 6 GB cards
+# use the 2.6B build or accept partial CPU offload. Small batches: local models are weaker at JSON.
+OLLAMA_DEFAULT_MODEL = "hf.co/INSAIT-Institute/BgGPT-Gemma-2-9B-IT-v1.0-GGUF:Q4_K_M"
+
+
+def ollama_settings(model: str | None = None) -> dict:
+    return {
+        "model": model or os.environ.get("OLLAMA_MODEL") or OLLAMA_DEFAULT_MODEL,
+        "host": os.environ.get("OLLAMA_HOST_URL", "http://localhost:11434"),
+        "batch_size": int(os.environ.get("OLLAMA_BATCH") or 25),
+    }
+
+
 def cache_dir() -> Path:
     return Path(os.environ.get("SUBTRANS_CACHE_DIR") or Path.home() / ".subtrans" / "cache")
