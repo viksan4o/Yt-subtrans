@@ -1,0 +1,10 @@
+[project]
+name = "subtrans"
+version = "0.1.0"
+description = "Engine for BG Subs: translate subtitles into Bulgarian"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

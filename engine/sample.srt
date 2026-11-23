@@ -1,0 +1,11 @@
+1
+00:00:01,000 --> 00:00:03,500
+Hey, welcome back to the channel!
+
+2
+00:00:04,000 --> 00:00:08,000
+Today we're testing a made-up subtitle line that is long enough to need wrapping.
+
+3
+00:00:08,500 --> 00:00:10,000
+[Music]

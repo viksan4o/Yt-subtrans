@@ -1,0 +1,2 @@
+# Engine core has no runtime dependencies yet. Dev only:
+pytest>=8

@@ -1,0 +1,126 @@
+"""Prompt building, response validation and batch translation with retry/split fallback."""
+
+import json
+import re
+from typing import Callable
+
+from .chunking import DEFAULT_BATCH_SIZE, DEFAULT_CONTEXT_SIZE, make_batches
+from .models import Cue
+from .providers.base import TranslationProvider
+from .wrap import wrap_text
+
+LANGUAGE_NAMES = {"en": "English", "bg": "Bulgarian", "de": "German", "es": "Spanish",
+                  "fr": "French", "it": "Italian", "ru": "Russian"}
+
+SYSTEM_TEMPLATE = """You translate subtitle cues from {source} to {target}.
+Rules:
+- Output JSON only: a list of {{"id": n, "text": "..."}} with exactly one item per input cue, the same ids, no merged or split cues.
+- Exactly ONE translation per cue. No notes, no variants, no transliteration or pronunciation.
+- Translate slang and idioms by meaning, using a real equivalent in {target}. If you do not know a genuine idiom, use plain neutral language. NEVER invent an idiom and never translate an idiom word for word.
+- Keep the speaker's tone and the intensity of profanity. No asterisk censoring; do not soften or intensify.
+- Gaming slang: "sweat"/"sweaty" means a try-hard player (Bulgarian: "потен").
+- Follow the glossary for slang and proper names, and keep names consistent.
+- Use the informal "ти" form by default. Render [Music] as [Музика] when translating into Bulgarian.
+- Keep each line short enough to read as a subtitle.
+The input is JSON with: title, glossary, context (previous cues as src/tgt pairs, read-only, do not output them) and cues (translate these)."""
+
+MAX_ATTEMPTS = 3  # first try + 2 retries
+
+
+class ValidationError(Exception):
+    pass
+
+
+class TranslationError(Exception):
+    pass
+
+
+def lang_name(code: str) -> str:
+    return LANGUAGE_NAMES.get(code, code)
+
+
+def build_system_prompt(source: str, target: str) -> str:
+    return SYSTEM_TEMPLATE.format(source=lang_name(source), target=lang_name(target))
+
+
+def build_user_payload(cues: list[Cue], context: list[tuple[str, str]], title: str = "",
+                       glossary: dict | None = None) -> str:
+    return json.dumps({
+        "title": title,
+        "glossary": glossary or {},
+        "context": [{"src": s, "tgt": t} for s, t in context],
+        "cues": [{"id": c.id, "text": c.text} for c in cues],
+    }, ensure_ascii=False)
+
+
+def parse_response(raw: str, expected_ids: list[int]) -> dict[int, str]:
+    """Parse the model reply; tolerate ``` fences. Raise ValidationError on any mismatch."""
+    text = raw.strip()
+    fence = re.match(r"^```[a-zA-Z]*\s*\n?(.*?)\n?```$", text, re.S)
+    if fence:
+        text = fence.group(1).strip()
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as e:
+        raise ValidationError(f"invalid JSON: {e}") from e
+    if isinstance(data, dict):  # accept {"cues": [...]} style wrappers
+        data = next((v for v in data.values() if isinstance(v, list)), None)
+    if not isinstance(data, list):
+        raise ValidationError("expected a JSON list")
+    result: dict[int, str] = {}
+    for item in data:
+        if not isinstance(item, dict) or "id" not in item or not isinstance(item.get("text"), str):
+            raise ValidationError(f"bad item: {item!r}")
+        if not item["text"].strip():
+            raise ValidationError(f"empty text for id {item['id']}")
+        try:
+            result[int(item["id"])] = item["text"].strip()
+        except (TypeError, ValueError) as e:
+            raise ValidationError(f"bad id: {item['id']!r}") from e
+    if len(data) != len(expected_ids) or set(result) != set(expected_ids):
+        raise ValidationError(f"ids mismatch: expected {sorted(expected_ids)}, got {sorted(result)}")
+    return result
+
+
+class Translator:
+    def __init__(self, provider: TranslationProvider, source: str = "en", target: str = "bg",
+                 title: str = "", glossary: dict | None = None,
+                 batch_size: int = DEFAULT_BATCH_SIZE, context_size: int = DEFAULT_CONTEXT_SIZE):
+        self.provider = provider
+        self.system = build_system_prompt(source, target)
+        self.title = title
+        self.glossary = glossary or {}
+        self.batch_size = batch_size
+        self.context_size = context_size
+
+    def _context_pairs(self, ctx: list[Cue], done: dict[int, str]) -> list[tuple[str, str]]:
+        return [(c.text, done.get(c.id, "")) for c in ctx]
+
+    def translate_batch(self, cues: list[Cue], context: list[Cue], done: dict[int, str]) -> dict[int, str]:
+        """Translate one batch: retry twice, then split in half and recurse."""
+        ids = [c.id for c in cues]
+        last_error = None
+        for _ in range(MAX_ATTEMPTS):
+            payload = build_user_payload(cues, self._context_pairs(context, done), self.title, self.glossary)
+            try:
+                return parse_response(self.provider.complete(self.system, payload), ids)
+            except ValidationError as e:
+                last_error = e
+        if len(cues) == 1:
+            raise TranslationError(f"Репликата с id {cues[0].id} не можа да бъде преведена: {last_error}")
+        mid = len(cues) // 2
+        first = self.translate_batch(cues[:mid], context, done)
+        merged = {**done, **first}
+        second_ctx = (context + cues[:mid])[-self.context_size:] if self.context_size else []
+        second = self.translate_batch(cues[mid:], second_ctx, merged)
+        return {**first, **second}
+
+    def translate(self, cues: list[Cue],
+                  on_progress: Callable[[int, int], None] | None = None) -> list[Cue]:
+        """Translate all cues; returns new cues with wrapped target text and identical timings."""
+        done: dict[int, str] = {}
+        for batch in make_batches(cues, self.batch_size, self.context_size):
+            done.update(self.translate_batch(batch.cues, batch.context, done))
+            if on_progress:
+                on_progress(len(done), len(cues))
+        return [Cue(c.id, c.start, c.end, wrap_text(done[c.id])) for c in cues]
