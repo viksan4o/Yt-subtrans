@@ -4,7 +4,9 @@
     python -m subtrans.cli translate-srt <file.srt> [options]
 
 Options: --src en --tgt bg --provider gemini|claude|ollama|fake --model NAME --rpm N --rpd N
-         --glossary file.json --srt out.srt
+         --api-key KEY --glossary file.json --srt out.srt
+Default provider: SUBTRANS_PROVIDER, else gemini when GEMINI_API_KEY is set, else ollama (no key).
+API keys come only from the environment/.env or --api-key; they are never cached or printed.
 Progress is cached per (video_id, source, target, provider, model): re-running resumes,
 and a finished run is served from the cache without new requests.
 """
@@ -32,6 +34,11 @@ def emit(event: str, **fields) -> None:
     print(json.dumps({"event": event, **fields}, ensure_ascii=False), flush=True)
 
 
+def default_provider() -> str:
+    """Works out of the box without any key: Gemini only when a key is configured."""
+    return os.environ.get("SUBTRANS_PROVIDER") or ("gemini" if os.environ.get("GEMINI_API_KEY") else "ollama")
+
+
 def model_name(provider: str, model: str | None) -> str:
     """Model id for the cache key, known without building the provider (so no key is needed)."""
     settings = {"gemini": gemini_settings, "claude": claude_settings, "ollama": ollama_settings}.get(provider)
@@ -51,7 +58,7 @@ def run(args, video_id: str, title: str, load_cues, default_out: Path) -> int:
         out = [Cue(c.id, c.start, c.end, wrap_text(done[c.id])) for c in cues]
     else:
         glossary = json.loads(Path(args.glossary).read_text(encoding="utf-8")) if args.glossary else {}
-        provider = get_provider(args.provider, args.model, args.rpm, args.rpd)
+        provider = get_provider(args.provider, args.model, args.rpm, args.rpd, args.api_key)
         extra = {"batch_size": provider.batch_size} if getattr(provider, "batch_size", None) else {}
         translator = Translator(provider, args.src, args.tgt, title=title, glossary=glossary, **extra)
         try:
@@ -94,10 +101,11 @@ def build_parser() -> argparse.ArgumentParser:
         t.add_argument("--src", default="en")
         t.add_argument("--tgt", default="bg")
         t.add_argument("--provider", choices=["gemini", "claude", "ollama", "fake"],
-                       help="default: SUBTRANS_PROVIDER from the environment/.env, else gemini")
+                       help="default: SUBTRANS_PROVIDER, else gemini if GEMINI_API_KEY is set, else ollama")
         t.add_argument("--model")
         t.add_argument("--rpm", type=int, help="requests per minute (Gemini)")
         t.add_argument("--rpd", type=int, help="requests per day (Gemini)")
+        t.add_argument("--api-key", help="key for gemini/claude (default: GEMINI_API_KEY / ANTHROPIC_API_KEY)")
         t.add_argument("--glossary")
         t.add_argument("--srt", help="output .srt path")
     return p
@@ -108,11 +116,14 @@ def main(argv=None) -> int:
         sys.stdout.reconfigure(encoding="utf-8")  # Windows consoles default to a legacy code page
     args = build_parser().parse_args(argv)
     load_dotenv()
-    args.provider = args.provider or os.environ.get("SUBTRANS_PROVIDER", "gemini")
+    args.provider = args.provider or default_provider()
     try:
         return cmd_translate(args) if args.command == "translate" else cmd_translate_srt(args)
     except Exception as e:  # report every failure as a JSON event for the app
-        emit("error", message=str(e))
+        message = str(e)
+        if args.api_key:  # never echo a key passed on the command line
+            message = message.replace(args.api_key, "***")
+        emit("error", message=message)
         return 1
 
 

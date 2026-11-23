@@ -5,17 +5,18 @@ from .fake import FakeProvider
 
 
 def get_provider(name: str, model: str | None = None, rpm: int | None = None,
-                 rpd: int | None = None) -> TranslationProvider:
+                 rpd: int | None = None, api_key: str | None = None) -> TranslationProvider:
+    """`api_key` (e.g. from --api-key) is only used by gemini/claude; else the env var is read."""
     if name == "fake":
         return FakeProvider()
     if name == "gemini":
         from ..config import gemini_settings
         from .gemini import GeminiProvider
-        return GeminiProvider(**gemini_settings(model, rpm, rpd))
+        return GeminiProvider(**gemini_settings(model, rpm, rpd), api_key=api_key)
     if name == "claude":
         from ..config import claude_settings
         from .claude import ClaudeProvider
-        return ClaudeProvider(**claude_settings(model, rpm, rpd))
+        return ClaudeProvider(**claude_settings(model, rpm, rpd), api_key=api_key)
     if name == "ollama":
         from ..config import ollama_settings
         from .ollama import OllamaProvider

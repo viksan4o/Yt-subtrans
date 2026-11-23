@@ -35,15 +35,21 @@ def parse_video_id(url_or_id: str) -> str:
 
 
 def snippets_to_cues(snippets, generated: bool) -> list[Cue]:
-    """Snippets have .text/.start/.duration. Auto captions overlap, so end = min(start+dur, next start)."""
+    """Snippets have .text/.start/.duration. Auto captions overlap, so end = min(start+dur, next start).
+
+    Auto captions also repeat the same line back to back; those are merged into one longer cue.
+    """
     items = [s for s in snippets if s.text.strip()]
-    cues = []
+    spans = []
     for i, s in enumerate(items):
-        end = s.start + s.duration
+        text, end = s.text.strip(), s.start + s.duration
         if generated and i + 1 < len(items):
             end = min(end, items[i + 1].start)
-        cues.append(Cue(i + 1, round(s.start, 3), round(end, 3), s.text.strip()))
-    return cues
+        if generated and spans and spans[-1][2].casefold() == text.casefold():
+            spans[-1][1] = max(spans[-1][1], end)
+            continue
+        spans.append([s.start, end, text])
+    return [Cue(i + 1, round(start, 3), round(end, 3), text) for i, (start, end, text) in enumerate(spans)]
 
 
 def fetch_captions(video_id: str, lang: str = "en", api=None) -> tuple[list[Cue], bool]:

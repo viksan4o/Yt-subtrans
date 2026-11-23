@@ -21,7 +21,8 @@ class GeminiProvider(TranslationProvider):
         if client is None:
             key = api_key or os.environ.get("GEMINI_API_KEY")
             if not key:
-                raise ValueError("Липсва Gemini API ключ. Задай GEMINI_API_KEY (или го въведи в настройките).")
+                raise ValueError("Липсва Gemini API ключ. Задай GEMINI_API_KEY или подай --api-key. "
+                                 "Без ключ ползвай локалния модел: --provider ollama")
             from google import genai  # imported lazily so tests and other providers do not need it
             client = genai.Client(api_key=key)
         self._client = client

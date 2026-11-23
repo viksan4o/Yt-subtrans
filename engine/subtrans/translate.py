@@ -26,6 +26,13 @@ The input is JSON with: title, glossary, context (previous cues as src/tgt pairs
 
 MAX_ATTEMPTS = 3  # first try + 2 retries
 
+_MUSIC_RE = re.compile(r"\[\s*(?:music|музика)\s*\]", re.IGNORECASE)
+
+
+def normalize_tags(text: str, target: str) -> str:
+    """Spec: sound tags in Bulgarian output are written [Музика], whatever the model returned."""
+    return _MUSIC_RE.sub("[Музика]", text) if target == "bg" else text
+
 
 class ValidationError(Exception):
     pass
@@ -91,6 +98,7 @@ class Translator:
                  batch_size: int = DEFAULT_BATCH_SIZE, context_size: int = DEFAULT_CONTEXT_SIZE):
         self.provider = provider
         self.system = build_system_prompt(source, target)
+        self.target = target
         self.title = title
         self.glossary = glossary or {}
         self.batch_size = batch_size
@@ -132,7 +140,8 @@ class Translator:
         for batch in make_batches(cues, self.batch_size, self.context_size):
             if all(c.id in done for c in batch.cues):
                 continue
-            done.update(self.translate_batch(batch.cues, batch.context, done))
+            result = self.translate_batch(batch.cues, batch.context, done)
+            done.update({i: normalize_tags(t, self.target) for i, t in result.items()})
             if on_batch:
                 on_batch(done)
             if on_progress:
