@@ -18,7 +18,8 @@ Rules:
 - Output JSON only: a list of {{"id": n, "src": "...", "text": "..."}} with exactly one item per input cue, the same ids, no merged or split cues. "src" is that cue's source text copied exactly; "text" is its translation.
 - Cues are often fragments of a sentence that continues in the next cue. Each "text" must translate ONLY the words of its own "src": never pull words from the next cue or push them into the previous one, even if {target} word order differs. Split the translated sentence at the matching point so every cue stays in sync with its timing.
 - Write correct, natural, everyday {target} as a native speaker would say it. Use only real, existing {target} words with correct spelling; never invent, blend or misspell words. If unsure of a word, choose a simpler common one.
-- Read the whole conversation first (context and all cues) and translate by meaning, not word by word. Use the terms native speakers really use for the topic, e.g. in sports commentary a "fake" is a feint (Bulgarian: "финт"), a "play" is an attack or action ("атака", "игра"), not a literal dictionary word.
+- The title tells you what the video is about: use it to understand the topic and choose the right terms.
+- Read the whole conversation first (context, all cues and the following cues) and translate by meaning, not word by word. Use the terms native speakers really use for the topic, e.g. in sports commentary a "fake" is a feint (Bulgarian: "финт"), a "play" is an attack or action ("атака", "игра"), not a literal dictionary word.
 - Exactly ONE translation per cue. No notes, no variants, no transliteration or pronunciation.
 - Translate slang and idioms by meaning, using a real equivalent in {target}. If you do not know a genuine idiom, use plain neutral language. NEVER invent an idiom and never translate an idiom word for word.
 - Keep the speaker's tone and the intensity of profanity. No asterisk censoring; do not soften or intensify.
@@ -27,7 +28,7 @@ Rules:
 - Keep terminology consistent: once a thing has a {target} name (see the context translations), reuse exactly that word and grammatical gender everywhere.
 - Use the informal "ти" form by default. Render [Music] as [Музика] when translating into Bulgarian.
 - Keep each line short enough to read as a subtitle.
-The input is JSON with: title, glossary, context (previous cues as src/tgt pairs, read-only, do not output them) and cues (translate these)."""
+The input is JSON with: title, glossary, context (previous cues as src/tgt pairs, read-only, do not output them), cues (translate these) and following (the next cues' source text, read-only, only to see how the last sentence continues; do not output them)."""
 
 MAX_ATTEMPTS = 3  # first try + 2 retries
 
@@ -56,12 +57,13 @@ def build_system_prompt(source: str, target: str) -> str:
 
 
 def build_user_payload(cues: list[Cue], context: list[tuple[str, str]], title: str = "",
-                       glossary: dict | None = None) -> str:
+                       glossary: dict | None = None, following: list[Cue] | None = None) -> str:
     return json.dumps({
         "title": title,
         "glossary": glossary or {},
         "context": [{"src": s, "tgt": t} for s, t in context],
         "cues": [{"id": c.id, "text": c.text} for c in cues],
+        "following": [c.text for c in following or []],
     }, ensure_ascii=False)
 
 
@@ -131,12 +133,14 @@ class Translator:
     def _context_pairs(self, ctx: list[Cue], done: dict[int, str]) -> list[tuple[str, str]]:
         return [(c.text, done.get(c.id, "")) for c in ctx]
 
-    def translate_batch(self, cues: list[Cue], context: list[Cue], done: dict[int, str]) -> dict[int, str]:
+    def translate_batch(self, cues: list[Cue], context: list[Cue], done: dict[int, str],
+                        after: list[Cue] | None = None) -> dict[int, str]:
         """Translate one batch: retry twice, then split in half and recurse."""
         ids = [c.id for c in cues]
         last_error = None
         for _ in range(MAX_ATTEMPTS):
-            payload = build_user_payload(cues, self._context_pairs(context, done), self.title, self.glossary)
+            payload = build_user_payload(cues, self._context_pairs(context, done), self.title, self.glossary,
+                                         after or [])
             try:
                 return parse_response(self.provider.complete(self.system, payload), ids,
                                       {c.id: c.text for c in cues})
@@ -147,10 +151,10 @@ class Translator:
             raise TranslationError(f"Репликата с id {cues[0].id} не можа да бъде преведена: {last_error}")
         mid = len(cues) // 2
         self._notice(f"Разделям репликите {ids[0]}–{ids[-1]} на две по-малки части…")
-        first = self.translate_batch(cues[:mid], context, done)
+        first = self.translate_batch(cues[:mid], context, done, (cues[mid:] + (after or []))[:self.context_size])
         merged = {**done, **first}
         second_ctx = (context + cues[:mid])[-self.context_size:] if self.context_size else []
-        second = self.translate_batch(cues[mid:], second_ctx, merged)
+        second = self.translate_batch(cues[mid:], second_ctx, merged, after)
         return {**first, **second}
 
     def _notice(self, message: str) -> None:
@@ -171,7 +175,7 @@ class Translator:
         for batch in make_batches(cues, self.batch_size, self.context_size):
             if all(c.id in done for c in batch.cues):
                 continue
-            result = self.translate_batch(batch.cues, batch.context, done)
+            result = self.translate_batch(batch.cues, batch.context, done, batch.after)
             done.update({i: normalize_tags(t, self.target) for i, t in result.items()})
             if on_batch:
                 on_batch(done)

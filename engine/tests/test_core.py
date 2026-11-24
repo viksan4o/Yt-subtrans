@@ -62,6 +62,15 @@ def test_batching_with_context():
     batches = make_batches(cues, size=4, context_size=2)
     assert [len(b.cues) for b in batches] == [4, 4, 2]
     assert batches[0].context == [] and [c.id for c in batches[1].context] == [3, 4]
+    assert [c.id for c in batches[0].after] == [5, 6] and batches[2].after == []
+
+
+def test_payload_has_title_and_following_cues():
+    import json
+    from subtrans.translate import build_user_payload
+    cues = [Cue(1, 0, 1, "He was talking so much to me that")]
+    data = json.loads(build_user_payload(cues, [], "NBA highlights", None, [Cue(2, 1, 2, "game.")]))
+    assert data["title"] == "NBA highlights" and data["following"] == ["game."]
 
 
 def test_parse_response_fenced_and_wrapped():

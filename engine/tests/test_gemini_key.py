@@ -318,3 +318,45 @@ def test_silent_model_is_left_after_first_reply_timeout(monkeypatch):
     assert [m for m, _ in calls] == ["slow", "fast"]
     assert calls[0][1] == {"thinking_level": "LOW"}
     assert any("не отговори за 0 с" in w or "не отговори" in w for w in waits)
+
+
+def test_lost_connection_is_retried_on_the_same_model():
+    calls, slept = [], []
+
+    def generate_content(model, contents, config):
+        calls.append(model)
+        if len(calls) < 3:
+            raise OSError("[Errno 11001] getaddrinfo failed")
+        return S(text='[{"id": 1, "text": "здрасти"}]')
+    from subtrans.throttle import RateLimiter
+    p = GeminiProvider("gemini-x", 10_000, 10_000, client=S(models=S(generate_content=generate_content)),
+                       fallbacks=("lite-a",), limiter=RateLimiter(10_000, 10_000, sleep=lambda s: None),
+                       sleep=slept.append)
+    assert "здрасти" in p.complete("SYS", "{}")
+    assert calls == ["gemini-x"] * 3 and slept == [5, 10]
+
+
+def test_last_free_model_is_retried_while_the_others_cool_down():
+    now = [0.0]
+    answers = iter([_ApiErr(503), _ApiErr(503), None])
+    calls = []
+
+    def generate_content(model, contents, config):
+        calls.append(model)
+        err = next(answers)
+        if err:
+            raise err
+        return S(text='[{"id": 1, "text": "здрасти"}]')
+    from subtrans.throttle import RateLimiter
+    slept = []
+
+    def sleep(s):
+        slept.append(s)
+        now[0] += s
+    p = GeminiProvider("gemini-x", 10_000, 10_000, client=S(models=S(generate_content=generate_content)),
+                       fallbacks=("lite-a",), limiter=RateLimiter(10_000, 10_000, sleep=lambda s: None),
+                       sleep=sleep, clock=lambda: now[0])
+    waits = []
+    p.on_wait = waits.append
+    assert "здрасти" in p.complete("SYS", "{}")
+    assert calls == ["gemini-x", "lite-a", "lite-a"] and slept == [5]

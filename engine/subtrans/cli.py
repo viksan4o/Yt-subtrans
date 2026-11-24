@@ -91,11 +91,12 @@ def cmd_translate_srt(args) -> int:
     return run(args, video_id, src_path.stem, lambda: parse_srt(raw), src_path.with_suffix(f".{args.tgt}.srt"))
 
 
-def cmd_translate(args, fetch=None) -> int:
-    from .youtube import fetch_captions, parse_video_id
+def cmd_translate(args, fetch=None, title_of=None) -> int:
+    from .youtube import fetch_captions, fetch_title, parse_video_id
     video_id = parse_video_id(args.url)
     fetch = fetch or fetch_captions
-    return run(args, video_id, video_id, lambda: fetch(video_id, args.src)[0],
+    title = (title_of or fetch_title)(video_id)
+    return run(args, video_id, title, lambda: fetch(video_id, args.src)[0],
                Path(f"{video_id}.{args.tgt}.srt"))
 
 

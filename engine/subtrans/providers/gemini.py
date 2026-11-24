@@ -27,6 +27,8 @@ REQUEST_TIMEOUT_S = int(os.environ.get("GEMINI_TIMEOUT") or 120)
 # A busy or silent model is skipped for this long; after that the next batch tries it again,
 # so the best model is used again as soon as it is free.
 COOLDOWN_S = float(os.environ.get("GEMINI_COOLDOWN") or 30)
+# When every model is busy at once, wait out a cooldown this many times per run before giving up.
+ALL_BUSY_WAITS = 10
 
 
 class _ModelUnavailable(Exception):
@@ -61,6 +63,13 @@ def _code(e: Exception):
 def _is_timeout(e: Exception) -> bool:
     return (isinstance(e, TimeoutError) or "Timeout" in type(e).__name__ or "timed out" in str(e).lower()
             or _code(e) == 504 or "DEADLINE_EXCEEDED" in str(e))
+
+
+def _is_network_error(e: Exception) -> bool:
+    """The connection itself failed (no internet, DNS, dropped link): worth waiting and retrying."""
+    name = type(e).__name__
+    return (isinstance(e, (ConnectionError, OSError)) and not isinstance(e, TimeoutError)) \
+        or any(k in name for k in ("ConnectError", "RemoteProtocolError", "ReadError", "NetworkError"))
 
 
 def _is_quota_error(e: Exception) -> bool:
@@ -122,6 +131,16 @@ class GeminiProvider(TranslationProvider):
                 message, temporary = e.args
                 self._blocked[self.model] = self._clock() + COOLDOWN_S if temporary else math.inf
                 rest = self._available()
+                waits = getattr(self, "_all_busy_waits", 0)
+                if not rest and waits < ALL_BUSY_WAITS:
+                    # Every model is busy for now: wait until the first one may be tried again.
+                    until = min((t for t in self._blocked.values() if t != math.inf), default=None)
+                    if until is not None:
+                        delay = max(1.0, until - self._clock())
+                        self._all_busy_waits = waits + 1
+                        self._say(f"Всички модели на Google са претоварени, чакам {delay:.0f} с...")
+                        (self._sleep or _wait)(delay)
+                        rest = self._available()
                 if not rest:
                     raise RuntimeError(f"{message} Няма друг наличен Gemini модел. Напредъкът е запазен: "
                                        "опитай пак по-късно (list-models показва моделите).") from e
@@ -174,6 +193,14 @@ class GeminiProvider(TranslationProvider):
                 quota, code = _is_quota_error(e), _code(e)
                 if code == 400 and "thinking" in str(e).lower() and model not in self._no_thinking:
                     self._no_thinking.add(model)  # this model has no thinking setting: ask again without
+                    continue
+                if _is_network_error(e) and _code(e) is None:
+                    if attempt == len(BUSY_RETRIES):
+                        raise RuntimeError("Няма връзка с Google (прекъсна ли интернетът?). Напредъкът е "
+                                           "запазен: пусни превода пак.") from e
+                    delay = BUSY_RETRIES[attempt]
+                    self._say(f"Няма връзка с Google, чакам {delay} с и опитвам пак...")
+                    (self._sleep or _wait)(delay)
                     continue
                 alone = len(self._available()) <= 1  # no other model to switch to
                 if _is_timeout(e):

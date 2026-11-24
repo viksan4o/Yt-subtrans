@@ -68,3 +68,20 @@ def fetch_captions(video_id: str, lang: str = "en", api=None) -> tuple[list[Cue]
             continue
         return snippets_to_cues(transcript.fetch(), generated), generated
     raise NoCaptions(NO_CAPTIONS.format(lang=lang))
+
+
+def fetch_title(video_id: str, timeout: float = 5) -> str:
+    """Title and channel of a clip (YouTube oEmbed, no key), so the model knows the topic.
+
+    Falls back to the video id when YouTube does not answer; translation never depends on it.
+    """
+    import json
+    import urllib.request
+    url = "https://www.youtube.com/oembed?format=json&url=https://www.youtube.com/watch?v=" + video_id
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as r:
+            data = json.loads(r.read().decode("utf-8"))
+        title, author = data.get("title") or video_id, data.get("author_name")
+        return f"{title} (канал: {author})" if author else title
+    except Exception:
+        return video_id

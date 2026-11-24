@@ -12,3 +12,4 @@ def _isolated_env(tmp_path, monkeypatch):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("subtrans.providers.gemini._wait", lambda s: None)  # no real retry waits
+    monkeypatch.setattr("subtrans.youtube.fetch_title", lambda video_id, timeout=5: video_id)  # no network
