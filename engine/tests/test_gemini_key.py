@@ -125,7 +125,7 @@ class _ApiErr(Exception):
         self.code = code
 
 
-def _gemini_with(errors, fallbacks=("lite-a", "lite-b")):
+def _gemini_with(errors, fallbacks=("lite-a", "lite-b"), clock=None):
     """Provider whose fake client raises the given error codes (or {model: code}) first, then answers."""
     from subtrans.throttle import RateLimiter
     calls = []
@@ -143,12 +143,13 @@ def _gemini_with(errors, fallbacks=("lite-a", "lite-b")):
     client = S(models=S(generate_content=generate_content))
     slept = []
     p = GeminiProvider("gemini-x", 10_000, 10_000, client=client, fallbacks=fallbacks,
-                       limiter=RateLimiter(10_000, 10_000, sleep=lambda s: None), sleep=slept.append)
+                       limiter=RateLimiter(10_000, 10_000, sleep=lambda s: None), sleep=slept.append,
+                       **({"clock": clock} if clock else {}))
     return p, calls, slept
 
 
 def test_busy_and_minute_limit_are_retried_on_same_model():
-    p, calls, slept = _gemini_with([503, 429, 503])
+    p, calls, slept = _gemini_with([503, 429, 503], fallbacks=())  # no other model to switch to
     waits = []
     p.on_wait = lambda m: m.startswith("Превеждам с") or waits.append(m)
     assert "здрасти" in p.complete("SYS", "{}")
@@ -156,15 +157,24 @@ def test_busy_and_minute_limit_are_retried_on_same_model():
     assert "претоварен" in waits[0] and "лимитът на минута" in waits[1]
 
 
-def test_busy_model_switches_to_fallback_and_stays_there():
-    p, calls, slept = _gemini_with({"gemini-x": 503})
+def test_busy_model_switches_at_once_and_comes_back_when_free():
+    now = [0.0]
+    p, calls, slept = _gemini_with({"gemini-x": 503}, clock=lambda: now[0])
     waits = []
     p.on_wait = lambda m: m.startswith("Превеждам с") or waits.append(m)
     assert "здрасти" in p.complete("SYS", "{}")
-    assert calls == ["gemini-x"] * 3 + ["lite-a"] and slept == [5, 10]
+    assert calls == ["gemini-x", "lite-a"] and slept == []
     assert "Минавам на „lite-a“" in waits[-1]
+    p.complete("SYS", "{}")  # still cooling down: stays on the fallback
+    assert calls[-1] == "lite-a"
+    now[0] += 31  # cooldown over: the best model is tried again on the next batch
     p.complete("SYS", "{}")
-    assert calls[-1] == "lite-a" and p.model == "lite-a"
+    assert calls[-2:] == ["gemini-x", "lite-a"]
+    p._client.models.generate_content = lambda model, contents, config: (calls.append(model), S(text="[]"))[1]
+    now[0] += 31
+    p.complete("SYS", "{}")
+    assert calls[-1] == "gemini-x" and p.model == "gemini-x"
+    assert any("връщам се" in w for w in waits)
 
 
 def test_unknown_model_switches_without_waiting():
@@ -279,3 +289,32 @@ def test_hanging_model_is_skipped_after_timeout():
     assert "здрасти" in p.complete("SYS", "{}")
     assert calls == ["gemini-x", "lite-a"] and slept == []
     assert any("не отговори" in w for w in waits)
+
+
+def test_silent_model_is_left_after_first_reply_timeout(monkeypatch):
+    """Streaming client: a model that sends nothing in time is skipped at once."""
+    import threading
+    from subtrans.providers import gemini
+    from subtrans.throttle import RateLimiter
+    monkeypatch.setattr(gemini, "FIRST_REPLY_TIMEOUT_S", 0.2)
+    hang = threading.Event()
+    calls = []
+
+    def stream(model, contents, config):
+        calls.append((model, config.get("thinking_config")))
+        if model == "slow":
+            hang.wait(5)
+            return
+        yield S(text='[{"id": 1, ')
+        yield S(text='"text": "здрасти"}]')
+
+    client = S(models=S(generate_content_stream=stream))
+    p = GeminiProvider("slow", 10_000, 10_000, client=client, fallbacks=("fast",),
+                       limiter=RateLimiter(10_000, 10_000, sleep=lambda s: None))
+    waits = []
+    p.on_wait = waits.append
+    assert p.complete("SYS", "{}") == '[{"id": 1, "text": "здрасти"}]'
+    hang.set()
+    assert [m for m, _ in calls] == ["slow", "fast"]
+    assert calls[0][1] == {"thinking_level": "LOW"}
+    assert any("не отговори за 0 с" in w or "не отговори" in w for w in waits)

@@ -131,9 +131,11 @@ def test_cli_emits_quota_event_then_resumes(tmp_path, capsys, monkeypatch):
     clients = iter([FakeGenAIClient(ok_calls=1), FakeGenAIClient()])
     monkeypatch.setenv("GEMINI_API_KEY", "dummy-test-key")
 
+    real_init = GeminiProvider.__init__
+
     def fake_init(self, model, rpm, rpd, api_key=None, client=None, limiter=None):
-        self.model, self._client = model, next(clients)
-        self.limiter = RateLimiter(10_000, 10_000, sleep=lambda s: None)
+        real_init(self, model, rpm, rpd, client=next(clients), fallbacks=(),
+                  limiter=RateLimiter(10_000, 10_000, sleep=lambda s: None))
     monkeypatch.setattr(GeminiProvider, "__init__", fake_init)
     monkeypatch.setattr(GeminiProvider, "batch_size", 2)
     monkeypatch.setattr("subtrans.translate.DEFAULT_BATCH_SIZE", 2)
