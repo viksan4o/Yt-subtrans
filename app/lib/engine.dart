@@ -52,7 +52,8 @@ class ErrorEvent extends EngineEvent {
 class DoneEvent extends EngineEvent {
   final List<Cue> cues;
   final String srtPath;
-  DoneEvent(this.cues, this.srtPath);
+  final String model; // the model that actually translated (a fallback may have taken over)
+  DoneEvent(this.cues, this.srtPath, [this.model = '']);
 }
 
 class ModelsEvent extends EngineEvent {
@@ -78,7 +79,7 @@ EngineEvent? parseEvent(String line) {
         return ErrorEvent(msg());
       case 'done':
         final cues = (j['cues'] as List).map((c) => Cue.fromJson(c as Map<String, dynamic>)).toList();
-        return DoneEvent(cues, (j['srt'] ?? '').toString());
+        return DoneEvent(cues, (j['srt'] ?? '').toString(), (j['model'] ?? '').toString());
       case 'models':
         return ModelsEvent((j['models'] as List).map((m) => m is Map ? '${m['name'] ?? m}' : '$m').toList());
     }

@@ -12,9 +12,10 @@ void main() {
     expect(parseEvent('{"event":"quota","message":"Дневният лимит е изчерпан."}'), isA<QuotaEvent>());
     expect(parseEvent('{"event":"error","message":"лошо"}'),
         isA<ErrorEvent>().having((e) => e.message, 'message', 'лошо'));
-    final done = parseEvent('{"event":"done","srt":"a.srt","cues":'
+    final done = parseEvent('{"event":"done","srt":"a.srt","model":"m1","cues":'
         '[{"id":1,"start":0.5,"end":2,"src":"Hi","tgt":"Здрасти","cps":3.1}]}') as DoneEvent;
     expect(done.cues.single.tgt, 'Здрасти');
+    expect(done.model, 'm1');
     expect(done.cues.single.start, 0.5);
     expect(parseEvent('not json'), isNull);
     expect(parseEvent('{"event":"unknown"}'), isNull);

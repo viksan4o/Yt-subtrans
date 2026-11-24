@@ -14,7 +14,8 @@ GEMINI_PRESETS = {
     "quality": ("gemini-3.8-flash", 5, 20),
     "volume": ("gemini-3.5-flash-lite", 15, 500),
 }
-GEMINI_DEFAULT_PRESET = "volume"
+# Quality by default: the flash-lite models invented Bulgarian words in real clips (Nov 2026).
+GEMINI_DEFAULT_PRESET = "quality"
 DEFAULT_PRESET = "quality"
 
 

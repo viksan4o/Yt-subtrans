@@ -71,7 +71,7 @@ class _HomePageState extends State<HomePage> {
         case DoneEvent():
           _cues = e.cues;
           _done = _total = e.cues.length;
-          _status = 'Готово: ${e.cues.length} реплики';
+          _status = 'Готово: ${e.cues.length} реплики${e.model.isEmpty ? '' : ' · преведено с ${e.model}'}';
         case ModelsEvent():
           break;
       }
@@ -128,7 +128,7 @@ class _HomePageState extends State<HomePage> {
             ]),
             const SizedBox(height: 8),
             Text('Доставчик: ${_providerName(widget.settings.provider)}'
-                '${widget.settings.model.isEmpty ? '' : ' · ${widget.settings.model}'}',
+                ' · модел: ${widget.settings.model.isEmpty ? _defaultModel(widget.settings.provider) : widget.settings.model}',
                 style: Theme.of(context).textTheme.bodySmall),
             const SizedBox(height: 12),
             if (_running) LinearProgressIndicator(value: _total > 0 ? _done / _total : null),
@@ -144,6 +144,9 @@ class _HomePageState extends State<HomePage> {
     );
   }
 }
+
+/// The engine's default model per provider (engine/subtrans/config.py).
+String _defaultModel(String p) => {'gemini': 'gemini-3.8-flash', 'ollama': 'BgGPT', 'claude': 'claude-opus-5-5'}[p] ?? '?';
 
 String _providerName(String p) =>
     {'gemini': 'Gemini', 'ollama': 'Ollama (локално)', 'claude': 'Claude'}[p] ?? p;

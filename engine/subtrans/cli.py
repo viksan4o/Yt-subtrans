@@ -56,6 +56,7 @@ def run(args, video_id: str, title: str, load_cues, default_out: Path) -> int:
     else:
         cues = load_cues()
         cache.cues = [dataclasses.asdict(c) for c in cues]
+    used_model = model_name(args.provider, args.model)
     emit("progress", done=sum(c.id in done for c in cues), total=len(cues))
     if cache.complete and all(c.id in done for c in cues):
         out = [Cue(c.id, c.start, c.end, wrap_text(done[c.id])) for c in cues]
@@ -66,6 +67,7 @@ def run(args, video_id: str, title: str, load_cues, default_out: Path) -> int:
             provider.on_wait = lambda message: emit("waiting", message=message)
         extra = {"batch_size": provider.batch_size} if getattr(provider, "batch_size", None) else {}
         translator = Translator(provider, args.src, args.tgt, title=title, glossary=glossary, **extra)
+        translator.on_notice = lambda message: emit("waiting", message=message)
         try:
             out = translator.translate(cues, on_progress=lambda d, t: emit("progress", done=d, total=t),
                                        done=done, on_batch=cache.save)
@@ -73,9 +75,10 @@ def run(args, video_id: str, title: str, load_cues, default_out: Path) -> int:
             emit("quota", message=QUOTA_MESSAGE)
             return 2
         cache.save({c.id: t.text for c, t in zip(cues, out)}, complete=True)
+        used_model = getattr(provider, "model", used_model)  # a fallback model may have taken over
     out_path = Path(args.srt) if args.srt else default_out
     out_path.write_text(write_srt(out), encoding="utf-8")
-    emit("done", srt=str(out_path), cues=[
+    emit("done", srt=str(out_path), provider=args.provider, model=used_model, cues=[
         {"id": s.id, "start": s.start, "end": s.end, "src": s.text, "tgt": t.text,
          "cps": chars_per_second(t.text, t.start, t.end)} for s, t in zip(cues, out)])
     return 0

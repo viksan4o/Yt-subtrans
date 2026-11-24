@@ -77,6 +77,6 @@ class AppSettings {
 
 /// Gemini presets: (model, RPM, RPD). Free-tier limits change; check Google AI Studio.
 const geminiPresets = {
-  'Качество': ('gemini-3.8-flash', '5', '20'),
+  'Качество (по подразбиране)': ('gemini-3.8-flash', '5', '20'),
   'Голям обем': ('gemini-3.5-flash-lite', '15', '500'),
 };

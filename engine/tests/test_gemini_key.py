@@ -26,7 +26,7 @@ def fake_genai(monkeypatch):
     created = []
 
     class Client:
-        def __init__(self, api_key):
+        def __init__(self, api_key, http_options=None):
             self.api_key, self.models = api_key, self
             created.append(self)
 
@@ -133,6 +133,8 @@ def _gemini_with(errors, fallbacks=("lite-a", "lite-b")):
     def generate_content(model, contents, config):
         calls.append(model)
         if isinstance(errors, dict):
+            if errors.get(model) == "timeout":
+                raise TimeoutError("The read operation timed out")
             if model in errors:
                 raise _ApiErr(errors[model])
         elif errors:
@@ -148,7 +150,7 @@ def _gemini_with(errors, fallbacks=("lite-a", "lite-b")):
 def test_busy_and_minute_limit_are_retried_on_same_model():
     p, calls, slept = _gemini_with([503, 429, 503])
     waits = []
-    p.on_wait = waits.append
+    p.on_wait = lambda m: m.startswith("Превеждам с") or waits.append(m)
     assert "здрасти" in p.complete("SYS", "{}")
     assert calls == ["gemini-x"] * 4 and slept == [5, 10, 20]
     assert "претоварен" in waits[0] and "лимитът на минута" in waits[1]
@@ -157,7 +159,7 @@ def test_busy_and_minute_limit_are_retried_on_same_model():
 def test_busy_model_switches_to_fallback_and_stays_there():
     p, calls, slept = _gemini_with({"gemini-x": 503})
     waits = []
-    p.on_wait = waits.append
+    p.on_wait = lambda m: m.startswith("Превеждам с") or waits.append(m)
     assert "здрасти" in p.complete("SYS", "{}")
     assert calls == ["gemini-x"] * 3 + ["lite-a"] and slept == [5, 10]
     assert "Минавам на „lite-a“" in waits[-1]
@@ -181,10 +183,20 @@ def test_all_models_failing_gives_clear_error():
 def test_daily_quota_is_not_retried(monkeypatch):
     from subtrans.providers import QuotaExceeded
     monkeypatch.setattr(_ApiErr, "extra", "GenerateRequestsPerDay")
-    p, calls, slept = _gemini_with([429])
+    p, calls, slept = _gemini_with([429], fallbacks=())
     with pytest.raises(QuotaExceeded):
         p.complete("SYS", "{}")
     assert len(calls) == 1 and slept == []
+
+
+def test_daily_quota_of_one_model_switches_to_the_next(monkeypatch):
+    monkeypatch.setattr(_ApiErr, "extra", "GenerateRequestsPerDay")
+    p, calls, slept = _gemini_with({"gemini-x": 429})
+    waits = []
+    p.on_wait = lambda m: m.startswith("Превеждам с") or waits.append(m)
+    assert "здрасти" in p.complete("SYS", "{}")
+    assert calls == ["gemini-x", "lite-a"] and slept == []
+    assert "Дневният лимит" in waits[0] and "lite-a" in waits[0]
 
 
 def test_minute_limit_becomes_quota_after_retries():
@@ -258,3 +270,12 @@ def test_fresh_ignores_saved_progress(tmp_path, capsys):
     events = [json.loads(ln) for ln in capsys.readouterr().out.splitlines()]
     assert events[0] == {"event": "progress", "done": 0, "total": 1}
     assert events[-1]["event"] == "done"
+
+
+def test_hanging_model_is_skipped_after_timeout():
+    p, calls, slept = _gemini_with({"gemini-x": "timeout"})
+    waits = []
+    p.on_wait = lambda m: m.startswith("Превеждам с") or waits.append(m)
+    assert "здрасти" in p.complete("SYS", "{}")
+    assert calls == ["gemini-x", "lite-a"] and slept == []
+    assert any("не отговори" in w for w in waits)

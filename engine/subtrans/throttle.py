@@ -21,6 +21,8 @@ class RateLimiter:
         self.clock, self.sleep = clock, sleep
         self.count = 0
         self._last: float | None = None
+        self.on_wait: Callable[[str], None] | None = None  # told about long pauses
+
 
     def wait(self) -> None:
         if self.count >= self.rpd:
@@ -28,6 +30,8 @@ class RateLimiter:
         if self._last is not None:
             delay = self._last + self.interval - self.clock()
             if delay > 0:
+                if delay >= 3 and self.on_wait:
+                    self.on_wait(f"Изчаквам {delay:.0f} с заради лимита от {60 / self.interval:.0f} заявки в минута…")
                 self.sleep(delay)
         self._last = self.clock()
         self.count += 1

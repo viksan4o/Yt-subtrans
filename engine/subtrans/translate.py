@@ -17,6 +17,8 @@ SYSTEM_TEMPLATE = """You translate subtitle cues from {source} to {target}.
 Rules:
 - Output JSON only: a list of {{"id": n, "src": "...", "text": "..."}} with exactly one item per input cue, the same ids, no merged or split cues. "src" is that cue's source text copied exactly; "text" is its translation.
 - Cues are often fragments of a sentence that continues in the next cue. Each "text" must translate ONLY the words of its own "src": never pull words from the next cue or push them into the previous one, even if {target} word order differs. Split the translated sentence at the matching point so every cue stays in sync with its timing.
+- Write correct, natural, everyday {target} as a native speaker would say it. Use only real, existing {target} words with correct spelling; never invent, blend or misspell words. If unsure of a word, choose a simpler common one.
+- Read the whole conversation first (context and all cues) and translate by meaning, not word by word. Use the terms native speakers really use for the topic, e.g. in sports commentary a "fake" is a feint (Bulgarian: "финт"), a "play" is an attack or action ("атака", "игра"), not a literal dictionary word.
 - Exactly ONE translation per cue. No notes, no variants, no transliteration or pronunciation.
 - Translate slang and idioms by meaning, using a real equivalent in {target}. If you do not know a genuine idiom, use plain neutral language. NEVER invent an idiom and never translate an idiom word for word.
 - Keep the speaker's tone and the intensity of profanity. No asterisk censoring; do not soften or intensify.
@@ -124,6 +126,7 @@ class Translator:
         self.glossary = glossary or {}
         self.batch_size = batch_size
         self.context_size = context_size
+        self.on_notice: Callable[[str], None] | None = None  # shown to the user while retrying
 
     def _context_pairs(self, ctx: list[Cue], done: dict[int, str]) -> list[tuple[str, str]]:
         return [(c.text, done.get(c.id, "")) for c in ctx]
@@ -139,14 +142,20 @@ class Translator:
                                       {c.id: c.text for c in cues})
             except ValidationError as e:
                 last_error = e
+                self._notice(f"Отговорът на модела не пасна на репликите {ids[0]}–{ids[-1]}, опитвам пак…")
         if len(cues) == 1:
             raise TranslationError(f"Репликата с id {cues[0].id} не можа да бъде преведена: {last_error}")
         mid = len(cues) // 2
+        self._notice(f"Разделям репликите {ids[0]}–{ids[-1]} на две по-малки части…")
         first = self.translate_batch(cues[:mid], context, done)
         merged = {**done, **first}
         second_ctx = (context + cues[:mid])[-self.context_size:] if self.context_size else []
         second = self.translate_batch(cues[mid:], second_ctx, merged)
         return {**first, **second}
+
+    def _notice(self, message: str) -> None:
+        if self.on_notice:
+            self.on_notice(message)
 
     def translate(self, cues: list[Cue],
                   on_progress: Callable[[int, int], None] | None = None,

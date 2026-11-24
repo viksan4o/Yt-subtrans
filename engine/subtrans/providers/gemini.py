@@ -7,16 +7,20 @@ from ..throttle import RateLimiter
 from .base import QuotaExceeded, TranslationProvider
 
 
-# Tried in this order when the chosen model is unknown for the key (404) or stays busy (503).
-# Checked Nov 2026 with a new key: the flash-lite models answered while the flash ones were busy.
-FALLBACK_MODELS = ("gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.8-flash",
-                   "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash")
+# Tried in this order when the chosen model is unknown for the key (404), stays busy (503) or has
+# used up its own daily quota (quotas are per model). Flash models first: flash-lite translated
+# into Bulgarian with invented words in real clips (Nov 2026), so it is only the last resort.
+FALLBACK_MODELS = ("gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash",
+                   "gemini-3.5-flash-lite", "gemini-3.1-flash-lite")
 # Seconds to wait before each retry of the same model after a per-minute limit (429).
 # After the last one a 429 counts as the daily quota (progress is kept).
 BUSY_RETRIES = (5, 10, 20, 40, 60)
 # A busy model (503) gets this many waits before switching to the next fallback model; the last
 # model in the chain gets all of BUSY_RETRIES.
 BUSY_BEFORE_SWITCH = 2
+# An overloaded model can leave a request hanging for many minutes (seen Nov 2026), so every
+# request gets a time limit; a model that does not answer in time is skipped for the next one.
+REQUEST_TIMEOUT_S = int(os.environ.get("GEMINI_TIMEOUT") or 60)
 
 
 class _ModelUnavailable(Exception):
@@ -44,6 +48,11 @@ def _code(e: Exception):
     return getattr(e, "code", None) or getattr(e, "status_code", None)
 
 
+def _is_timeout(e: Exception) -> bool:
+    return (isinstance(e, TimeoutError) or "Timeout" in type(e).__name__ or "timed out" in str(e).lower()
+            or _code(e) == 504 or "DEADLINE_EXCEEDED" in str(e))
+
+
 def _is_quota_error(e: Exception) -> bool:
     return _code(e) == 429 or "RESOURCE_EXHAUSTED" in str(e)
 
@@ -61,13 +70,14 @@ class GeminiProvider(TranslationProvider):
         self._failed: set[str] = set()
         self.on_wait = None  # optional callback(message) shown while waiting before a retry
         self.limiter = limiter or RateLimiter(rpm, rpd)
+        self.limiter.on_wait = self._say
         if client is None:
             key = api_key or os.environ.get("GEMINI_API_KEY")
             if not key:
                 raise ValueError("Липсва Gemini API ключ. Задай GEMINI_API_KEY или подай --api-key. "
                                  "Без ключ ползвай локалния модел: --provider ollama")
             from google import genai  # imported lazily so tests and other providers do not need it
-            client = genai.Client(api_key=key)
+            client = genai.Client(api_key=key, http_options={"timeout": REQUEST_TIMEOUT_S * 1000})
         self._client = client
 
     def _say(self, message: str) -> None:
@@ -96,6 +106,9 @@ class GeminiProvider(TranslationProvider):
         config = {"system_instruction": system, "response_mime_type": "application/json", "temperature": 0.3}
         busy_limit = BUSY_BEFORE_SWITCH if self._next_model() else len(BUSY_RETRIES)
         busy = 0
+        if model not in getattr(self, "_announced", set()):
+            self._announced = getattr(self, "_announced", set()) | {model}
+            self._say(f"Превеждам с „{model}“…")
         for attempt in range(len(BUSY_RETRIES) + 1):
             self.limiter.wait()
             try:
@@ -103,11 +116,17 @@ class GeminiProvider(TranslationProvider):
                 return resp.text or ""
             except Exception as e:
                 quota, code = _is_quota_error(e), _code(e)
+                if _is_timeout(e):
+                    if self._next_model():
+                        raise _ModelUnavailable(f"„{model}“ не отговори за {REQUEST_TIMEOUT_S} с.") from e
+                    code = 503  # last model: treat like a busy reply and retry
                 if code == 404:
                     raise _ModelUnavailable(f"Моделът „{model}“ не е наличен за този ключ.") from e
                 if not quota and code != 503:
                     raise
                 if quota and "PerDay" in str(e):  # daily quota: waiting minutes will not help
+                    if self._next_model():  # each model has its own daily quota
+                        raise _ModelUnavailable(f"Дневният лимит на „{model}“ е изчерпан.") from e
                     raise QuotaExceeded(str(e)) from e
                 if code == 503 and not quota:
                     if busy >= busy_limit:
